@@ -5,6 +5,7 @@ pipeline {
         DOCKER_IMAGE = "raghavantaken98/react-docker-demo"
         DOCKER_CREDENTIALS = "dockerhub-credentials"
         APP_SERVER = "ubuntu@15.206.205.106"
+        SSH_CREDENTIALS = "app-server-ssh-key"
     }
 
     stages {
@@ -17,22 +18,54 @@ pipeline {
 
         stage('Install Dependencies') {
             steps {
-                sh 'npm ci'
+                sh '''
+                    echo "========================================="
+                    echo "Node.js Version"
+                    echo "========================================="
+                    node -v
+
+                    echo "========================================="
+                    echo "NPM Version"
+                    echo "========================================="
+                    npm -v
+
+                    echo "========================================="
+                    echo "Installing Dependencies"
+                    echo "========================================="
+
+                    npm ci
+                '''
             }
         }
 
         stage('Build React') {
             steps {
-                sh 'npm run build'
+                sh '''
+                    echo "========================================="
+                    echo "Building React Application"
+                    echo "========================================="
+
+                    npm run build
+
+                    echo "React build completed successfully."
+                '''
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 sh '''
+                    echo "========================================="
+                    echo "Building Docker Image"
+                    echo "========================================="
+
                     docker build \
                         -t "$DOCKER_IMAGE:$BUILD_NUMBER" \
                         -t "$DOCKER_IMAGE:latest" .
+
+                    echo "Docker image built successfully."
+
+                    docker images | grep react-docker-demo || true
                 '''
             }
         }
@@ -47,9 +80,15 @@ pipeline {
                     )
                 ]) {
                     sh '''
+                        echo "========================================="
+                        echo "Logging in to Docker Hub"
+                        echo "========================================="
+
                         echo "$DOCKER_PASSWORD" | docker login \
                             -u "$DOCKER_USERNAME" \
                             --password-stdin
+
+                        echo "Docker Hub login successful."
                     '''
                 }
             }
@@ -58,23 +97,50 @@ pipeline {
         stage('Push Docker Image') {
             steps {
                 sh '''
+                    echo "========================================="
+                    echo "Pushing Docker Image"
+                    echo "========================================="
+
                     docker push "$DOCKER_IMAGE:$BUILD_NUMBER"
+
                     docker push "$DOCKER_IMAGE:latest"
+
+                    echo "Docker images pushed successfully."
                 '''
+            }
+        }
+
+        stage('Test SSH Connection') {
+            steps {
+                sshagent(credentials: [env.SSH_CREDENTIALS]) {
+                    sh '''
+                        echo "========================================="
+                        echo "Testing SSH Connection"
+                        echo "========================================="
+
+                        ssh -o StrictHostKeyChecking=no \
+                            "$APP_SERVER" \
+                            "echo 'SSH connection successful'; hostname"
+
+                        echo "SSH authentication successful."
+                    '''
+                }
             }
         }
 
         stage('Deploy to Application EC2') {
             steps {
-                sh '''
-                    echo "========================================="
-                    echo "Deploying to Application EC2"
-                    echo "========================================="
+                sshagent(credentials: [env.SSH_CREDENTIALS]) {
+                    sh '''
+                        echo "========================================="
+                        echo "Deploying to Application EC2"
+                        echo "========================================="
 
-                    echo "Application Server: $APP_SERVER"
-                    echo "Docker Image: $DOCKER_IMAGE:$BUILD_NUMBER"
+                        echo "Application Server: $APP_SERVER"
+                        echo "Docker Image: $DOCKER_IMAGE:$BUILD_NUMBER"
 
-                    ssh -o StrictHostKeyChecking=no "$APP_SERVER" "bash -s" <<EOF
+                        ssh -o StrictHostKeyChecking=no "$APP_SERVER" \
+                            "DOCKER_IMAGE='$DOCKER_IMAGE' BUILD_NUMBER='$BUILD_NUMBER' bash -s" <<'EOF'
 
 set -e
 
@@ -82,7 +148,12 @@ echo "========================================="
 echo "Connected to Application EC2"
 echo "========================================="
 
-echo "Checking Docker..."
+echo "Hostname:"
+hostname
+
+echo "========================================="
+echo "Checking Docker"
+echo "========================================="
 
 if ! command -v docker >/dev/null 2>&1; then
 
@@ -105,7 +176,7 @@ if ! command -v docker >/dev/null 2>&1; then
 
     echo "Adding Docker repository..."
 
-    echo "deb [arch=\\\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \\\$(. /etc/os-release && echo \\\${UBUNTU_CODENAME:-\\\$VERSION_CODENAME}) stable" \
+    echo "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \$(. /etc/os-release && echo \${UBUNTU_CODENAME:-\$VERSION_CODENAME}) stable" \
         | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
     sudo apt update
@@ -116,6 +187,9 @@ if ! command -v docker >/dev/null 2>&1; then
         containerd.io \
         docker-buildx-plugin \
         docker-compose-plugin
+
+    sudo systemctl enable docker
+    sudo systemctl start docker
 
 else
 
@@ -130,10 +204,18 @@ echo "========================================="
 sudo docker --version
 
 echo "========================================="
+echo "Docker Service Status"
+echo "========================================="
+
+sudo systemctl is-active docker || true
+
+echo "========================================="
 echo "Pulling Docker Image"
 echo "========================================="
 
-sudo docker pull "$DOCKER_IMAGE:$BUILD_NUMBER"
+echo "Image: \$DOCKER_IMAGE:\$BUILD_NUMBER"
+
+sudo docker pull "\$DOCKER_IMAGE:\$BUILD_NUMBER"
 
 echo "========================================="
 echo "Stopping Existing Container"
@@ -155,7 +237,7 @@ sudo docker run -d \
     --name react-app \
     --restart unless-stopped \
     -p 80:80 \
-    "$DOCKER_IMAGE:$BUILD_NUMBER"
+    "\$DOCKER_IMAGE:\$BUILD_NUMBER"
 
 echo "========================================="
 echo "Container Status"
@@ -164,11 +246,26 @@ echo "========================================="
 sudo docker ps
 
 echo "========================================="
+echo "Testing Application"
+echo "========================================="
+
+sleep 5
+
+if curl -I http://localhost >/dev/null 2>&1; then
+    echo "Application is responding on port 80."
+else
+    echo "WARNING: Application did not respond on port 80."
+    sudo docker logs react-app
+    exit 1
+fi
+
+echo "========================================="
 echo "Deployment Completed Successfully"
 echo "========================================="
 
 EOF
-                '''
+                    '''
+                }
             }
         }
     }
@@ -179,6 +276,7 @@ EOF
             echo '========================================='
             echo 'Build and Deployment Successful!'
             echo '========================================='
+            echo "Application deployed to ${APP_SERVER}"
         }
 
         failure {
