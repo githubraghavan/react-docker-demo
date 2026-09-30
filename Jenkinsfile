@@ -29,11 +29,11 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh """
+                sh '''
                     docker build \
-                        -t ${DOCKER_IMAGE}:${BUILD_NUMBER} \
-                        -t ${DOCKER_IMAGE}:latest .
-                """
+                        -t "$DOCKER_IMAGE:$BUILD_NUMBER" \
+                        -t "$DOCKER_IMAGE:latest" .
+                '''
             }
         }
 
@@ -57,89 +57,134 @@ pipeline {
 
         stage('Push Docker Image') {
             steps {
-                sh """
-                    docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
-                    docker push ${DOCKER_IMAGE}:latest
-                """
+                sh '''
+                    docker push "$DOCKER_IMAGE:$BUILD_NUMBER"
+                    docker push "$DOCKER_IMAGE:latest"
+                '''
             }
         }
 
         stage('Deploy to Application EC2') {
             steps {
-                sh """
-                    ssh -o StrictHostKeyChecking=no ${APP_SERVER} '
-                        set -e
+                sh '''
+                    echo "========================================="
+                    echo "Deploying to Application EC2"
+                    echo "========================================="
 
-                        echo "Checking Docker installation..."
+                    echo "Application Server: $APP_SERVER"
+                    echo "Docker Image: $DOCKER_IMAGE:$BUILD_NUMBER"
 
-                        if ! command -v docker >/dev/null 2>&1; then
+                    ssh -o StrictHostKeyChecking=no "$APP_SERVER" "bash -s" <<EOF
 
-                            echo "Docker not found. Installing Docker..."
+set -e
 
-                            sudo apt update
+echo "========================================="
+echo "Connected to Application EC2"
+echo "========================================="
 
-                            sudo apt install -y ca-certificates curl
+echo "Checking Docker..."
 
-                            sudo install -m 0755 -d /etc/apt/keyrings
+if ! command -v docker >/dev/null 2>&1; then
 
-                            sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-                                -o /etc/apt/keyrings/docker.asc
+    echo "Docker not found."
+    echo "Installing Docker..."
 
-                            sudo chmod a+r /etc/apt/keyrings/docker.asc
+    sudo apt update
 
-                            echo "deb [arch=\\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \\$(. /etc/os-release && echo \\${UBUNTU_CODENAME:-\\$VERSION_CODENAME}) stable" \
-                                | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    sudo apt install -y \
+        ca-certificates \
+        curl
 
-                            sudo apt update
+    sudo install -m 0755 -d /etc/apt/keyrings
 
-                            sudo apt install -y \
-                                docker-ce \
-                                docker-ce-cli \
-                                containerd.io \
-                                docker-buildx-plugin \
-                                docker-compose-plugin
+    sudo curl -fsSL \
+        https://download.docker.com/linux/ubuntu/gpg \
+        -o /etc/apt/keyrings/docker.asc
 
-                        fi
+    sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-                        echo "Docker version:"
-                        sudo docker --version
+    echo "Adding Docker repository..."
 
-                        echo "Pulling Docker image..."
+    echo "deb [arch=\\\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \\\$(. /etc/os-release && echo \\\${UBUNTU_CODENAME:-\\\$VERSION_CODENAME}) stable" \
+        | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-                        sudo docker pull ${DOCKER_IMAGE}:${BUILD_NUMBER}
+    sudo apt update
 
-                        echo "Stopping old container..."
+    sudo apt install -y \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin
 
-                        sudo docker stop react-app || true
+else
 
-                        echo "Removing old container..."
+    echo "Docker is already installed."
 
-                        sudo docker rm react-app || true
+fi
 
-                        echo "Starting new container..."
+echo "========================================="
+echo "Docker Version"
+echo "========================================="
 
-                        sudo docker run -d \
-                            --name react-app \
-                            --restart unless-stopped \
-                            -p 80:80 \
-                            ${DOCKER_IMAGE}:${BUILD_NUMBER}
+sudo docker --version
 
-                        echo "Running containers:"
+echo "========================================="
+echo "Pulling Docker Image"
+echo "========================================="
 
-                        sudo docker ps
-                    '
-                """
+sudo docker pull "$DOCKER_IMAGE:$BUILD_NUMBER"
+
+echo "========================================="
+echo "Stopping Existing Container"
+echo "========================================="
+
+sudo docker stop react-app || true
+
+echo "========================================="
+echo "Removing Existing Container"
+echo "========================================="
+
+sudo docker rm react-app || true
+
+echo "========================================="
+echo "Starting New Container"
+echo "========================================="
+
+sudo docker run -d \
+    --name react-app \
+    --restart unless-stopped \
+    -p 80:80 \
+    "$DOCKER_IMAGE:$BUILD_NUMBER"
+
+echo "========================================="
+echo "Container Status"
+echo "========================================="
+
+sudo docker ps
+
+echo "========================================="
+echo "Deployment Completed Successfully"
+echo "========================================="
+
+EOF
+                '''
             }
         }
     }
 
     post {
+
         success {
-            echo 'Build and deployment successful!'
+            echo '========================================='
+            echo 'Build and Deployment Successful!'
+            echo '========================================='
         }
 
         failure {
-            echo 'Build or deployment failed.'
+            echo '========================================='
+            echo 'Build or Deployment Failed!'
+            echo '========================================='
         }
     }
 }
