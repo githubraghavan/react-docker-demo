@@ -1,3 +1,4 @@
+```groovy
 pipeline {
     agent any
 
@@ -112,17 +113,34 @@ pipeline {
 
         stage('Test SSH Connection') {
             steps {
-                sshagent(credentials: [env.SSH_CREDENTIALS]) {
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'app-server-ssh-key',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USERNAME'
+                    )
+                ]) {
+
                     sh '''
                         echo "========================================="
                         echo "Testing SSH Connection"
                         echo "========================================="
 
-                        ssh -o StrictHostKeyChecking=no \
-                            "$APP_SERVER" \
+                        echo "Application Server: $APP_SERVER"
+                        echo "SSH Username: $SSH_USERNAME"
+
+                        chmod 600 "$SSH_KEY"
+
+                        ssh \
+                            -i "$SSH_KEY" \
+                            -o StrictHostKeyChecking=no \
+                            -o UserKnownHostsFile=/dev/null \
+                            "$SSH_USERNAME@15.206.205.106" \
                             "echo 'SSH connection successful'; hostname"
 
-                        echo "SSH authentication successful."
+                        echo "========================================="
+                        echo "SSH Authentication Successful"
+                        echo "========================================="
                     '''
                 }
             }
@@ -130,7 +148,14 @@ pipeline {
 
         stage('Deploy to Application EC2') {
             steps {
-                sshagent(credentials: [env.SSH_CREDENTIALS]) {
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'app-server-ssh-key',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USERNAME'
+                    )
+                ]) {
+
                     sh '''
                         echo "========================================="
                         echo "Deploying to Application EC2"
@@ -139,7 +164,13 @@ pipeline {
                         echo "Application Server: $APP_SERVER"
                         echo "Docker Image: $DOCKER_IMAGE:$BUILD_NUMBER"
 
-                        ssh -o StrictHostKeyChecking=no "$APP_SERVER" \
+                        chmod 600 "$SSH_KEY"
+
+                        ssh \
+                            -i "$SSH_KEY" \
+                            -o StrictHostKeyChecking=no \
+                            -o UserKnownHostsFile=/dev/null \
+                            "$SSH_USERNAME@15.206.205.106" \
                             "DOCKER_IMAGE='$DOCKER_IMAGE' BUILD_NUMBER='$BUILD_NUMBER' bash -s" <<'EOF'
 
 set -e
@@ -246,17 +277,33 @@ echo "========================================="
 sudo docker ps
 
 echo "========================================="
+echo "Container Logs"
+echo "========================================="
+
+sudo docker logs --tail 20 react-app
+
+echo "========================================="
 echo "Testing Application"
 echo "========================================="
 
 sleep 5
 
 if curl -I http://localhost >/dev/null 2>&1; then
+
     echo "Application is responding on port 80."
+
 else
-    echo "WARNING: Application did not respond on port 80."
+
+    echo "Application did not respond on port 80."
+
+    echo "========================================="
+    echo "Container Logs"
+    echo "========================================="
+
     sudo docker logs react-app
+
     exit 1
+
 fi
 
 echo "========================================="
@@ -286,3 +333,4 @@ EOF
         }
     }
 }
+
