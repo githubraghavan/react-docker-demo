@@ -1,4 +1,3 @@
-groovy
 pipeline {
     agent any
 
@@ -9,35 +8,48 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout') {
-            steps { checkout scm }
+            steps {
+                checkout scm
+            }
         }
 
         stage('Install Dependencies') {
-            steps { sh 'npm ci' }
+            steps {
+                sh 'npm ci'
+            }
         }
 
         stage('Build React') {
-            steps { sh 'npm run build' }
+            steps {
+                sh 'npm run build'
+            }
         }
 
         stage('Build Docker Image') {
             steps {
                 sh """
-                    docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} -t ${DOCKER_IMAGE}:latest .
+                    docker build \
+                        -t ${DOCKER_IMAGE}:${BUILD_NUMBER} \
+                        -t ${DOCKER_IMAGE}:latest .
                 """
             }
         }
 
         stage('Docker Login') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: "${DOCKER_CREDENTIALS}",
-                    usernameVariable: 'raghavantaken98',
-                    passwordVariable: 'DOCKER_PASSWORD'
-                )]) {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
                     sh '''
-                        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+                        echo "$DOCKER_PASSWORD" | docker login \
+                            -u "$DOCKER_USERNAME" \
+                            --password-stdin
                     '''
                 }
             }
@@ -58,21 +70,62 @@ pipeline {
                     ssh -o StrictHostKeyChecking=no ${APP_SERVER} '
                         set -e
 
+                        echo "Checking Docker installation..."
+
                         if ! command -v docker >/dev/null 2>&1; then
+
+                            echo "Docker not found. Installing Docker..."
+
                             sudo apt update
+
                             sudo apt install -y ca-certificates curl
+
                             sudo install -m 0755 -d /etc/apt/keyrings
-                            sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+
+                            sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+                                -o /etc/apt/keyrings/docker.asc
+
                             sudo chmod a+r /etc/apt/keyrings/docker.asc
-                            echo "deb [arch=\\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \\$(. /etc/os-release && echo \\${UBUNTU_CODENAME:-\\$VERSION_CODENAME}) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+                            echo "deb [arch=\\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \\$(. /etc/os-release && echo \\${UBUNTU_CODENAME:-\\$VERSION_CODENAME}) stable" \
+                                | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
                             sudo apt update
-                            sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+                            sudo apt install -y \
+                                docker-ce \
+                                docker-ce-cli \
+                                containerd.io \
+                                docker-buildx-plugin \
+                                docker-compose-plugin
+
                         fi
 
+                        echo "Docker version:"
+                        sudo docker --version
+
+                        echo "Pulling Docker image..."
+
                         sudo docker pull ${DOCKER_IMAGE}:${BUILD_NUMBER}
+
+                        echo "Stopping old container..."
+
                         sudo docker stop react-app || true
+
+                        echo "Removing old container..."
+
                         sudo docker rm react-app || true
-                        sudo docker run -d --name react-app --restart unless-stopped -p 80:80 ${DOCKER_IMAGE}:${BUILD_NUMBER}
+
+                        echo "Starting new container..."
+
+                        sudo docker run -d \
+                            --name react-app \
+                            --restart unless-stopped \
+                            -p 80:80 \
+                            ${DOCKER_IMAGE}:${BUILD_NUMBER}
+
+                        echo "Running containers:"
+
                         sudo docker ps
                     '
                 """
@@ -81,7 +134,12 @@ pipeline {
     }
 
     post {
-        success { echo 'Build and deployment successful!' }
-        failure { echo 'Build or deployment failed.' }
+        success {
+            echo 'Build and deployment successful!'
+        }
+
+        failure {
+            echo 'Build or deployment failed.'
+        }
     }
 }
